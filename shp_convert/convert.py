@@ -34,8 +34,10 @@ ctk.set_default_color_theme("blue")
 gpd.options.io_engine = "pyogrio"
 
 ENCODING_OPTIONS = {
-    "GBK / GB2312（国内历史数据）": "gbk",
-    "UTF-8": "utf-8",
+    "GBK（国内最常用）": "GBK",
+    "GB2312（早期标准）": "GB2312",
+    "GB18030（GBK超集）": "GB18030",
+    "UTF-8": "UTF-8",
     "自动识别（根据 .cpg 文件）": None,
 }
 
@@ -140,8 +142,20 @@ class App(ctk.CTk):
         self.fmt_switch.pack(side="left", padx=(4, 12), pady=12)
 
         self.fmt_hint = ctk.CTkLabel(fmt_frame, text="", text_color="gray", font=ctk.CTkFont(size=12))
-        self.fmt_hint.pack(side="left", padx=(0, 12))
+        self.fmt_hint.pack(side="left", padx=(0, 16))
         self._update_fmt_hint(saved_fmt)
+
+        ctk.CTkLabel(fmt_frame, text="输出编码：").pack(side="left", padx=(0, 4))
+
+        saved_out_enc = self._config.get("output_encoding", "UTF-8")
+        self.out_enc_switch = ctk.CTkSegmentedButton(
+            fmt_frame,
+            values=["UTF-8", "GBK"],
+            command=lambda _: self._persist_config(),
+            width=130,
+        )
+        self.out_enc_switch.set(saved_out_enc)
+        self.out_enc_switch.pack(side="left", padx=(0, 12))
 
         # 进度条
         self.progress_bar = ctk.CTkProgressBar(self)
@@ -196,10 +210,36 @@ class App(ctk.CTk):
             "last_epsg": self.epsg_entry.get().strip(),
             "output_format": self.fmt_switch.get(),
             "source_encoding": self.enc_menu.get(),
+            "output_encoding": self.out_enc_switch.get(),
         })
 
     def _get_source_encoding(self):
         return ENCODING_OPTIONS.get(self.enc_menu.get())
+
+    def _read_shp(self, path, encoding, **kwargs):
+        """临时写入 .cpg 文件指定编码，确保 GDAL 以正确编码读取 DBF"""
+        if not encoding:
+            return gpd.read_file(path, **kwargs)
+
+        cpg_path = os.path.splitext(path)[0] + ".cpg"
+        cpg_existed = os.path.exists(cpg_path)
+        original_content = None
+
+        if cpg_existed:
+            with open(cpg_path, "r", errors="replace") as f:
+                original_content = f.read()
+
+        with open(cpg_path, "w") as f:
+            f.write(encoding)
+
+        try:
+            return gpd.read_file(path, **kwargs)
+        finally:
+            if cpg_existed:
+                with open(cpg_path, "w") as f:
+                    f.write(original_content)
+            else:
+                os.remove(cpg_path)
 
     def browse_files(self):
         files = filedialog.askopenfilenames(
@@ -217,11 +257,10 @@ class App(ctk.CTk):
     def show_crs_info(self):
         self.log(f"已选择 {len(self.selected_files)} 个文件，当前坐标系信息如下：\n{'─' * 40}")
         enc = self._get_source_encoding()
-        read_kwargs = {"encoding": enc} if enc else {}
         for shp_path in self.selected_files:
             file_name = os.path.basename(shp_path)
             try:
-                data = gpd.read_file(shp_path, rows=1, **read_kwargs)
+                data = self._read_shp(shp_path, enc, rows=1)
                 if data.crs is None:
                     self.log(f"  {file_name} — 原始坐标系：未知（缺少 .prj 文件）", tag="crs")
                 else:
@@ -264,11 +303,12 @@ class App(ctk.CTk):
 
         use_zip = self.fmt_switch.get() == "ZIP 压缩包"
         source_enc = self._get_source_encoding()
+        output_enc = self.out_enc_switch.get().lower()
         self._persist_config()
-        thread = threading.Thread(target=self.run_conversion, args=(int(epsg_str), use_zip, source_enc), daemon=True)
+        thread = threading.Thread(target=self.run_conversion, args=(int(epsg_str), use_zip, source_enc, output_enc), daemon=True)
         thread.start()
 
-    def run_conversion(self, target_epsg, use_zip, source_enc):
+    def run_conversion(self, target_epsg, use_zip, source_enc, output_enc):
         shp_files = self.selected_files
         total = len(shp_files)
 
@@ -280,16 +320,15 @@ class App(ctk.CTk):
         self.log(f"目标坐标系：EPSG:{target_epsg}", tag="target")
         fmt_label = "ZIP 压缩包" if use_zip else "文件夹"
         enc_label = source_enc.upper() if source_enc else "自动识别"
-        self.log(f"源文件编码：{enc_label}  输出格式：{fmt_label}\n开始转换 {total} 个文件...\n{'─' * 40}")
+        self.log(f"源文件编码：{enc_label}  输出编码：{output_enc.upper()}  格式：{fmt_label}\n开始转换 {total} 个文件...\n{'─' * 40}")
 
-        read_kwargs = {"encoding": source_enc} if source_enc else {}
         success, failed = 0, 0
 
         for i, shp_path in enumerate(shp_files, 1):
             file_name = os.path.basename(shp_path)
             base_name = os.path.splitext(file_name)[0]
             try:
-                data = gpd.read_file(shp_path, **read_kwargs)
+                data = self._read_shp(shp_path, source_enc)
 
                 if data.crs is None:
                     self.log(f"[跳过] {file_name} — 缺少 .prj 文件，无法识别坐标系")
@@ -300,7 +339,8 @@ class App(ctk.CTk):
                     # 先保存到临时子文件夹
                     sub_dir = os.path.join(output_dir, base_name)
                     os.makedirs(sub_dir, exist_ok=True)
-                    converted.to_file(os.path.join(sub_dir, file_name), encoding="utf-8")
+                    out_path = os.path.join(sub_dir, file_name)
+                    converted.to_file(out_path, encoding=output_enc)
 
                     if use_zip:
                         zip_path = os.path.join(output_dir, f"{base_name}.zip")
@@ -312,10 +352,19 @@ class App(ctk.CTk):
                     else:
                         self.log(f"[成功] {file_name}")
 
+                    # 读回输出文件，验证前2行属性数据
+                    self._log_preview(out_path if not use_zip else None,
+                                      zip_path if use_zip else None,
+                                      base_name, file_name, output_enc)
                     success += 1
 
             except Exception as e:
-                self.log(f"[失败] {file_name} — {e}")
+                err = str(e)
+                if "codec can't decode" in err or "invalid continuation byte" in err or "invalid start byte" in err:
+                    hint = f"[失败] {file_name} — 编码不匹配（当前选择：{enc_label}），请切换源文件编码后重试"
+                    self.log(hint)
+                else:
+                    self.log(f"[失败] {file_name} — {err}")
                 failed += 1
 
             progress = i / total
@@ -328,6 +377,30 @@ class App(ctk.CTk):
     def _update_progress(self, value, current, total):
         self.progress_bar.set(value)
         self.progress_label.configure(text=f"{current} / {total}")
+
+    def _log_preview(self, shp_path, zip_path, base_name, file_name, output_enc):
+        """读回输出文件，展示前2行属性数据用于验证编码"""
+        try:
+            if zip_path:
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp:
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        zf.extractall(tmp)
+                    read_path = os.path.join(tmp, file_name)
+                    preview = gpd.read_file(read_path)
+            else:
+                preview = gpd.read_file(shp_path)
+
+            cols = [c for c in preview.columns if c != "geometry"]
+            if not cols:
+                return
+            rows = preview[cols].head(2)
+            self.log("  预览（前2行属性）：")
+            for _, row in rows.iterrows():
+                vals = "  |  ".join(f"{c}: {row[c]}" for c in cols[:4])
+                self.log(f"    {vals}")
+        except Exception as e:
+            self.log(f"  预览失败：{e}")
 
     def reset_button(self):
         self._converting = False
