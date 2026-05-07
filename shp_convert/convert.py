@@ -33,6 +33,12 @@ ctk.set_default_color_theme("blue")
 
 gpd.options.io_engine = "pyogrio"
 
+ENCODING_OPTIONS = {
+    "GBK / GB2312（国内历史数据）": "gbk",
+    "UTF-8": "utf-8",
+    "自动识别（根据 .cpg 文件）": None,
+}
+
 CRS_PRESETS = {
     "CGCS2000 (EPSG:4490)": "4490",
     "WGS84 (EPSG:4326)": "4326",
@@ -48,7 +54,7 @@ class App(ctk.CTk):
         super().__init__()
 
         self.title("SHP 坐标转换工具")
-        self.geometry("620x600")
+        self.geometry("620x650")
         self.resizable(False, False)
 
         self.selected_files = []
@@ -71,6 +77,25 @@ class App(ctk.CTk):
         self.folder_entry.pack(side="left", padx=4, pady=12)
 
         ctk.CTkButton(file_frame, text="浏览", width=72, command=self.browse_files).pack(side="left", padx=(4, 12))
+
+        # 源文件编码选择区域
+        enc_frame = ctk.CTkFrame(self)
+        enc_frame.pack(fill="x", padx=24, pady=(0, 10))
+
+        ctk.CTkLabel(enc_frame, text="源文件编码：").pack(side="left", padx=(12, 4), pady=12)
+
+        saved_enc = self._config.get("source_encoding", "GBK / GB2312（国内历史数据）")
+        if saved_enc not in ENCODING_OPTIONS:
+            saved_enc = "GBK / GB2312（国内历史数据）"
+
+        self.enc_menu = ctk.CTkOptionMenu(
+            enc_frame,
+            values=list(ENCODING_OPTIONS.keys()),
+            command=lambda _: self._persist_config(),
+            width=260,
+        )
+        self.enc_menu.set(saved_enc)
+        self.enc_menu.pack(side="left", padx=(4, 12), pady=12)
 
         # 目标坐标系选择区域
         crs_frame = ctk.CTkFrame(self)
@@ -170,7 +195,11 @@ class App(ctk.CTk):
             "last_crs_preset": self.crs_menu.get(),
             "last_epsg": self.epsg_entry.get().strip(),
             "output_format": self.fmt_switch.get(),
+            "source_encoding": self.enc_menu.get(),
         })
+
+    def _get_source_encoding(self):
+        return ENCODING_OPTIONS.get(self.enc_menu.get())
 
     def browse_files(self):
         files = filedialog.askopenfilenames(
@@ -187,10 +216,12 @@ class App(ctk.CTk):
 
     def show_crs_info(self):
         self.log(f"已选择 {len(self.selected_files)} 个文件，当前坐标系信息如下：\n{'─' * 40}")
+        enc = self._get_source_encoding()
+        read_kwargs = {"encoding": enc} if enc else {}
         for shp_path in self.selected_files:
             file_name = os.path.basename(shp_path)
             try:
-                data = gpd.read_file(shp_path, rows=1)
+                data = gpd.read_file(shp_path, rows=1, **read_kwargs)
                 if data.crs is None:
                     self.log(f"  {file_name} — 原始坐标系：未知（缺少 .prj 文件）", tag="crs")
                 else:
@@ -232,11 +263,12 @@ class App(ctk.CTk):
         self._converting = True
 
         use_zip = self.fmt_switch.get() == "ZIP 压缩包"
+        source_enc = self._get_source_encoding()
         self._persist_config()
-        thread = threading.Thread(target=self.run_conversion, args=(int(epsg_str), use_zip), daemon=True)
+        thread = threading.Thread(target=self.run_conversion, args=(int(epsg_str), use_zip, source_enc), daemon=True)
         thread.start()
 
-    def run_conversion(self, target_epsg, use_zip):
+    def run_conversion(self, target_epsg, use_zip, source_enc):
         shp_files = self.selected_files
         total = len(shp_files)
 
@@ -247,15 +279,17 @@ class App(ctk.CTk):
 
         self.log(f"目标坐标系：EPSG:{target_epsg}", tag="target")
         fmt_label = "ZIP 压缩包" if use_zip else "文件夹"
-        self.log(f"输出格式：{fmt_label}\n开始转换 {total} 个文件...\n{'─' * 40}")
+        enc_label = source_enc.upper() if source_enc else "自动识别"
+        self.log(f"源文件编码：{enc_label}  输出格式：{fmt_label}\n开始转换 {total} 个文件...\n{'─' * 40}")
 
+        read_kwargs = {"encoding": source_enc} if source_enc else {}
         success, failed = 0, 0
 
         for i, shp_path in enumerate(shp_files, 1):
             file_name = os.path.basename(shp_path)
             base_name = os.path.splitext(file_name)[0]
             try:
-                data = gpd.read_file(shp_path)
+                data = gpd.read_file(shp_path, **read_kwargs)
 
                 if data.crs is None:
                     self.log(f"[跳过] {file_name} — 缺少 .prj 文件，无法识别坐标系")
