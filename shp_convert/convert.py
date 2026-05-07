@@ -3,9 +3,10 @@ import geopandas as gpd
 import os
 import json
 import shutil
+import sys
 import threading
 import zipfile
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".shp_converter", "config.json")
 
@@ -51,7 +52,9 @@ class App(ctk.CTk):
         self.resizable(False, False)
 
         self.selected_files = []
+        self._converting = False
         self._config = load_config()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # 标题
         ctk.CTkLabel(self, text="SHP 坐标转换工具", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(24, 4))
@@ -226,6 +229,7 @@ class App(ctk.CTk):
         self.convert_btn.configure(state="disabled", text="转换中...")
         self.progress_bar.set(0)
         self.progress_label.configure(text="")
+        self._converting = True
 
         use_zip = self.fmt_switch.get() == "ZIP 压缩包"
         self._persist_config()
@@ -292,7 +296,19 @@ class App(ctk.CTk):
         self.progress_label.configure(text=f"{current} / {total}")
 
     def reset_button(self):
+        self._converting = False
         self.convert_btn.configure(state="normal", text="开始转换")
+
+    def _on_close(self):
+        if self._converting:
+            confirmed = messagebox.askyesno(
+                title="确认退出",
+                message="文件正在转换中，强制退出可能导致输出文件不完整。\n\n确定要退出吗？"
+            )
+            if not confirmed:
+                return
+        self.destroy()
+        sys.exit(0)
 
 
 if __name__ == "__main__":
