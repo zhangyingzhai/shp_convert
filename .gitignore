@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller
+dist/
+build/
+*.spec
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+
+# 转换输出结果
+转换结果_*/

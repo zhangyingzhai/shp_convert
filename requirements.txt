@@ -1,0 +1,6 @@
+geopandas
+fiona
+pyproj
+shapely
+customtkinter
+pyinstaller
