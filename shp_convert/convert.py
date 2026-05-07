@@ -57,7 +57,8 @@ class App(ctk.CTk):
 
         self.title("SHP 坐标转换工具")
         self.geometry("620x650")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(620, 600)
 
         self.selected_files = []
         self._converting = False
