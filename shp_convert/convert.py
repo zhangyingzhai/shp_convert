@@ -30,6 +30,8 @@ def save_config(data: dict):
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
+gpd.options.io_engine = "pyogrio"
+
 CRS_PRESETS = {
     "CGCS2000 (EPSG:4490)": "4490",
     "WGS84 (EPSG:4326)": "4326",

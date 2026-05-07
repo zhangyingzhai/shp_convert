@@ -1,5 +1,5 @@
 geopandas
-fiona
+pyogrio
 pyproj
 shapely
 customtkinter
